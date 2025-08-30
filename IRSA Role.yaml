@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  CloudFormation template to create IRSA IAM Role for Astronomer namespace on EKS.
+
+Parameters:
+  ClusterOIDCProviderArn:
+    Type: String
+    Description: ARN of the EKS OIDC Provider
+  Namespace:
+    Type: String
+    Default: astronomer
+    Description: Kubernetes namespace for the service account
+  ServiceAccountName:
+    Type: String
+    Default: astronomer-sa
+    Description: Kubernetes Service Account name
+  RoleName:
+    Type: String
+    Default: astronomer-irsa-role
+    Description: IAM Role Name
+
+Resources:
+  IamRoleForIRSA:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref ClusterOIDCProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals: !Sub
+                - |
+                  {
+                    "${oidc}:sub": "system:serviceaccount:${namespace}:${serviceaccount}",
+                    "${oidc}:aud": "sts.amazonaws.com"
+                  }
+                - oidc: !Ref ClusterOIDCProviderArn
+                  namespace: !Ref Namespace
+                  serviceaccount: !Ref ServiceAccountName
+
+  CloudWatchPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: cloudwatch-logging
+      Roles:
+        - !Ref IamRoleForIRSA
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "*"
+
+  TerraformPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: terraform-access
+      Roles:
+        - !Ref IamRoleForIRSA
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:*
+              - dynamodb:*
+            Resource: "*"
+
+  SecretsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-secrets
+      Roles:
+        - !Ref IamRoleForIRSA
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+              - kms:Decrypt
+            Resource: "*"
+
+Outputs:
+  RoleArn:
+    Description: ARN of IAM Role for Astronomer IRSA
+    Value: !GetAtt IamRoleForIRSA.Arn
